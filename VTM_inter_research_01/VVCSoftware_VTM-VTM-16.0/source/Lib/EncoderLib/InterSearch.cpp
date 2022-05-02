@@ -2692,21 +2692,21 @@ void InterSearch::predInterSearch(CodingUnit& cu, Partitioner& partitioner)
 {
   CodingStructure& cs = *cu.cs;
 
-  AMVPInfo     amvp[2];
+  AMVPInfo     amvp[2]; // AMVP candidated list, for previous frame & future frame. It stores the best AMVP info. after M.E.(the result will be the ME's start point.)
   Mv           cMvSrchRngLT;
   Mv           cMvSrchRngRB;
 
   Mv           cMvZero;
 
-  Mv           cMv[2];
-  Mv           cMvBi[2];
+  Mv           cMv[2]; // the two best MV for uni-prediction. (get from M.E.)
+  Mv           cMvBi[2]; // the best MV for bi-prediction.
   Mv           cMvTemp[2][33];
   Mv           cMvHevcTemp[2][33];
-  int          iNumPredDir = cs.slice->isInterP() ? 1 : 2;
+  int          iNumPredDir = cs.slice->isInterP() ? 1 : 2; // ref. frame amount.
+  // 2: previous frame & future frame. 33: imply L0,L1 have at most 33 ref. frames.
+  Mv           cMvPred[2][33]; // store the best MVPs which get from AMVP.
 
-  Mv           cMvPred[2][33];
-
-  Mv           cMvPredBi[2][33];
+  Mv           cMvPredBi[2][33]; // M.E.'s start point MV in bi-prediciton.
   int          aaiMvpIdxBi[2][33];
 
   int          aaiMvpIdx[2][33];
@@ -2743,7 +2743,7 @@ void InterSearch::predInterSearch(CodingUnit& cu, Partitioner& partitioner)
   bool         bCleanCandExist;
 #endif
 
-  AMVPInfo     aacAMVPInfo[2][33];
+  AMVPInfo     aacAMVPInfo[2][33]; // saves the best AMVP info. for every frames.
 
   int refIdx[2] = { 0, 0 };   // If un-initialized, may cause SEGV in bi-directional prediction iterative stage.
   int          iRefIdxBi[2] = { -1, -1 };
@@ -2767,7 +2767,7 @@ void InterSearch::predInterSearch(CodingUnit& cu, Partitioner& partitioner)
   // Loop over Prediction Units
   CHECK(!cu.firstPU, "CU does not contain any PUs");
   uint32_t         puIdx = 0;
-  auto &pu = *cu.firstPU;
+  auto &pu = *cu.firstPU; // the CU added in xcheckRDCostInter fn.
   WPScalingParam *wp0;
   WPScalingParam *wp1;
   int tryBipred = 0;
@@ -2847,7 +2847,7 @@ void InterSearch::predInterSearch(CodingUnit& cu, Partitioner& partitioner)
     }
     m_encOnly = true;
     // motion estimation only evaluates luma component
-    m_maxCompIDToPred = MAX_NUM_COMPONENT;
+    m_maxCompIDToPred = MAX_NUM_COMPONENT; 
 //    m_maxCompIDToPred = COMPONENT_Y;
 
     CHECK(pu.cu != &cu, "PU is contained in another CU");
@@ -2902,11 +2902,12 @@ void InterSearch::predInterSearch(CodingUnit& cu, Partitioner& partitioner)
       //  Uni-directional prediction
       for (int refList = 0; refList < iNumPredDir; refList++)
       {
-        RefPicList eRefPicList = (refList ? REF_PIC_LIST_1 : REF_PIC_LIST_0);
+        RefPicList eRefPicList = (refList ? REF_PIC_LIST_1 : REF_PIC_LIST_0); // reference list index(L0/L1)
+        // traverse the ref. frames which are existed in ref.-frame list. refIdxTemp: reference index
         for (int refIdxTemp = 0; refIdxTemp < cs.slice->getNumRefIdx(eRefPicList); refIdxTemp++)
         {
           bitsTemp = mbBits[refList];
-          if ( cs.slice->getNumRefIdx(eRefPicList) > 1 )
+          if ( cs.slice->getNumRefIdx(eRefPicList) > 1 ) //multi. ref. frame condition.
           {
             bitsTemp += refIdxTemp + 1;
             if (refIdxTemp == cs.slice->getNumRefIdx(eRefPicList) - 1)
@@ -2914,11 +2915,12 @@ void InterSearch::predInterSearch(CodingUnit& cu, Partitioner& partitioner)
               bitsTemp--;
             }
           }
+          // AMVP, selects the best MVP (as the M.E.'s start point).
           xEstimateMvPredAMVP(pu, origBuf, eRefPicList, refIdxTemp, cMvPred[refList][refIdxTemp], amvp[eRefPicList],
                               false, &biPDistTemp);
 
-          aaiMvpIdx[refList][refIdxTemp] = pu.mvpIdx[eRefPicList];
-          aaiMvpNum[refList][refIdxTemp] = pu.mvpNum[eRefPicList];
+          aaiMvpIdx[refList][refIdxTemp] = pu.mvpIdx[eRefPicList]; // the best MVP index of the ref. frame for the corresponding ref. list.
+          aaiMvpNum[refList][refIdxTemp] = pu.mvpNum[eRefPicList]; // MVP's amount
 #if GDR_ENABLED
           if (isEncodeGdrClean)
           {
@@ -2953,10 +2955,10 @@ void InterSearch::predInterSearch(CodingUnit& cu, Partitioner& partitioner)
 #else
           if (cs.picHeader->getMvdL1ZeroFlag() && refList == 1 && biPDistTemp < bestBiPDist)
 #endif
-          {
+          { // copy L0 info. to L1.
             bestBiPDist = biPDistTemp;
-            bestBiPMvpL1    = aaiMvpIdx[refList][refIdxTemp];
-            bestBiPRefIdxL1 = refIdxTemp;
+            bestBiPMvpL1    = aaiMvpIdx[refList][refIdxTemp]; // record the best candidated MV index.
+            bestBiPRefIdxL1 = refIdxTemp; // record the best ref. frame's  index.
 #if GDR_ENABLED
             if (isEncodeGdrClean)
             {
@@ -2967,10 +2969,12 @@ void InterSearch::predInterSearch(CodingUnit& cu, Partitioner& partitioner)
 
           bitsTemp += m_auiMVPIdxCost[aaiMvpIdx[refList][refIdxTemp]][AMVP_MAX_NUM_CANDS];
 
-          if (m_pcEncCfg->getFastMEForGenBLowDelayEnabled() && refList == 1)   // list 1
+          if (m_pcEncCfg->getFastMEForGenBLowDelayEnabled() && refList == 1)   // list 1, general B-frame is enable.
           {
-            if (cs.slice->getList1IdxToList0Idx(refIdxTemp) >= 0)
+            if (cs.slice->getList1IdxToList0Idx(refIdxTemp) >= 0) // if using general B-frame, then copy list0 info. to list1.
             {
+              //
+              //
               cMvTemp[1][refIdxTemp] = cMvTemp[0][cs.slice->getList1IdxToList0Idx(refIdxTemp)];
 #if GDR_ENABLED
               if (isEncodeGdrClean)
